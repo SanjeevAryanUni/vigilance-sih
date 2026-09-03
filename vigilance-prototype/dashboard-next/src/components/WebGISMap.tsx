@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -23,83 +23,115 @@ interface WebGISMapProps {
   onStatusChange: (clusterId: number, newStatus: string) => void;
 }
 
+// All styles use proven raster tile services — zero API keys needed
+const MAP_STYLES: Record<string, { label: string; style: maplibregl.StyleSpecification }> = {
+  osmStandard: {
+    label: '🗺️ Street Map',
+    style: {
+      version: 8,
+      sources: {
+        'osm-tiles': {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors',
+        },
+      },
+      layers: [
+        {
+          id: 'osm-tiles-layer',
+          type: 'raster',
+          source: 'osm-tiles',
+          minzoom: 0,
+          maxzoom: 19,
+        },
+      ],
+    },
+  },
+  esriSatellite: {
+    label: '🛰️ Satellite',
+    style: {
+      version: 8,
+      sources: {
+        'esri-satellite': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+          attribution: '© Esri, Maxar, Earthstar Geographics',
+        },
+      },
+      layers: [
+        { id: 'esri-satellite-layer', type: 'raster', source: 'esri-satellite', minzoom: 0, maxzoom: 20 },
+      ],
+    },
+  },
+  esriTopo: {
+    label: '🏔️ Topography',
+    style: {
+      version: 8,
+      sources: {
+        'esri-topo': {
+          type: 'raster',
+          tiles: [
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+          ],
+          tileSize: 256,
+          attribution: '© Esri, HERE, Garmin, OpenStreetMap',
+        },
+      },
+      layers: [
+        { id: 'esri-topo-layer', type: 'raster', source: 'esri-topo', minzoom: 0, maxzoom: 20 },
+      ],
+    },
+  },
+  humanitarian: {
+    label: '🏥 Humanitarian',
+    style: {
+      version: 8,
+      sources: {
+        'hot-tiles': {
+          type: 'raster',
+          tiles: ['https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors, Humanitarian OSM Team',
+        },
+      },
+      layers: [
+        { id: 'hot-tiles-layer', type: 'raster', source: 'hot-tiles', minzoom: 0, maxzoom: 19 },
+      ],
+    },
+  },
+};
+
+const DEFAULT_STYLE = 'osmStandard';
+
 export default function WebGISMap({ clusters, onStatusChange }: WebGISMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
+  const clustersRef = useRef<ClusterData[]>(clusters);
+  const [currentStyle, setCurrentStyle] = useState<string>(DEFAULT_STYLE);
 
+  // Keep the ref in sync with the latest clusters prop
   useEffect(() => {
-    if (!mapContainer.current) return;
+    clustersRef.current = clusters;
+  }, [clusters]);
 
-    // Carto Dark Matter style
-    const map = new maplibregl.Map({
-      container: mapContainer.current,
-      style: {
-        version: 8,
-        sources: {
-          'carto-dark': {
-            type: 'raster',
-            tiles: [
-              'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-              'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-              'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'
-            ],
-            tileSize: 256,
-            attribution: '© OpenStreetMap contributors, © CARTO'
-          }
-        },
-        layers: [
-          {
-            id: 'carto-dark-layer',
-            type: 'raster',
-            source: 'carto-dark',
-            minzoom: 0,
-            maxzoom: 20
-          }
-        ]
-      },
-      center: [80.2030, 13.0067], // Chennai Center (Guindy / Kathipara)
-      zoom: 11.5,
-      pitch: 30,
-    });
-
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
-    mapRef.current = map;
-
-    // Ensure map fits container correctly on render
-    map.on('load', () => {
-      map.resize();
-    });
-
-    const resizeObserver = new ResizeObserver(() => {
-      map.resize();
-    });
-    if (mapContainer.current) {
-      resizeObserver.observe(mapContainer.current);
-    }
-
-    return () => {
-      resizeObserver.disconnect();
-      map.remove();
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    // Clear old markers
+  // Helper: add cluster markers to the map
+  const addMarkers = (map: maplibregl.Map, clusterData: ClusterData[]) => {
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
 
-    clusters.forEach((c) => {
+    clusterData.forEach((c) => {
       const isCrit = c.max_severity?.toLowerCase() === 'critical';
       const el = document.createElement('div');
       el.className = 'custom-cluster-node cursor-pointer';
-      
-      const bgColor = isCrit ? '#DC2626' : (c.rpi_score > 75 ? '#EA580C' : '#2563EB');
+
+      const bgColor = isCrit ? '#DC2626' : c.rpi_score > 75 ? '#EA580C' : '#2563EB';
       const borderColor = isCrit ? '#FCA5A5' : '#93C5FD';
-      
+
       el.innerHTML = `
         <div style="
           background: ${bgColor};
@@ -144,11 +176,82 @@ export default function WebGISMap({ clusters, onStatusChange }: WebGISMapProps) 
 
       markersRef.current.push(marker);
     });
+  };
+
+  useEffect(() => {
+    if (!mapContainer.current) return;
+
+    const map = new maplibregl.Map({
+      container: mapContainer.current,
+      style: MAP_STYLES[DEFAULT_STYLE].style,
+      center: [80.2030, 13.0067], // Chennai Center (Guindy / Kathipara)
+      zoom: 11.5,
+      pitch: 30,
+    });
+
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+    mapRef.current = map;
+
+    map.on('load', () => {
+      map.resize();
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      map.resize();
+    });
+    if (mapContainer.current) {
+      resizeObserver.observe(mapContainer.current);
+    }
+
+    return () => {
+      resizeObserver.disconnect();
+      map.remove();
+    };
+  }, []);
+
+  const handleStyleChange = (styleKey: string) => {
+    setCurrentStyle(styleKey);
+    const map = mapRef.current;
+    if (map && MAP_STYLES[styleKey]) {
+      map.setStyle(MAP_STYLES[styleKey].style);
+      // Re-add markers after style finishes loading — use ref for latest data
+      map.once('style.load', () => {
+        addMarkers(map, clustersRef.current);
+      });
+    }
+  };
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // Wait until map is fully loaded before adding markers
+    if (map.loaded()) {
+      addMarkers(map, clusters);
+    } else {
+      map.once('load', () => addMarkers(map, clusters));
+    }
   }, [clusters]);
 
   return (
     <div className="w-full h-full min-h-[450px] relative rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
       <div ref={mapContainer} className="w-full h-full absolute inset-0" />
+
+      {/* Map Style Switcher Bar */}
+      <div className="absolute top-3 left-3 z-10 flex flex-wrap gap-1 bg-slate-900/90 border border-slate-700/80 backdrop-blur p-1.5 rounded-lg shadow-xl">
+        {Object.entries(MAP_STYLES).map(([key, item]) => (
+          <button
+            key={key}
+            onClick={() => handleStyleChange(key)}
+            className={`px-2.5 py-1 text-[11px] font-medium rounded transition-all ${
+              currentStyle === key
+                ? 'bg-blue-600 text-white font-semibold shadow-md shadow-blue-600/30'
+                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

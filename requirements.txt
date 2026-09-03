@@ -9,3 +9,12 @@ Pillow==11.3.0
 ultralytics==8.4.131
 opencv-python-headless==4.11.0.86
 requests==2.32.5
+onnxruntime==1.20.1
+celery[redis]==5.4.0
+redis==5.2.1
+psycopg2-binary==2.9.10
+geoalchemy2==0.16.0
+paho-mqtt==2.1.0
+python-dotenv==1.0.1
+pytest==8.3.4
+httpx==0.28.1

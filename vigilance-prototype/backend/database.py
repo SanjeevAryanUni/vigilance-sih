@@ -2,6 +2,13 @@ import os
 import math
 import numpy as np
 from datetime import datetime
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Text, text
 from sqlalchemy.orm import declarative_base, sessionmaker

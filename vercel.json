@@ -1,5 +1,5 @@
 {
-  "buildCommand": "cd vigilance-prototype/dashboard-next && npm install --legacy-peer-deps && npm run build",
+  "buildCommand": "cd vigilance-prototype/dashboard-next && npm install && npm run build",
   "outputDirectory": "vigilance-prototype/dashboard-next/.next",
   "framework": "nextjs"
 }

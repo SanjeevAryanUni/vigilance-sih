@@ -87,8 +87,10 @@ By mounting sub-₹3,000 edge camera units on existing public transit fleets (bu
 │   ├── indian_road_potholes.jpg    # Road distress hazard
 │   └── road_before_after.jpg       # AI proof-of-work repair verification
 │
-└── docs/                           # 📚 Problem Statement & Pitch Guidelines
-    ├── PRESENTATION_SCRIPT.md      # 6-7 Minute Pitch Script & Judge Q&A Prep
+└── docs/                           # 📚 Documentation & Technical Reports
+    ├── VIGILANCE_SIH2026_Engineering_Journey_and_Implementation_Report.docx # Complete Engineering Report
+    ├── generate_team_report_docx.py   # Automated DOCX Report Generator
+    ├── PRESENTATION_SCRIPT.md          # 6-7 Minute Pitch Script & Judge Q&A Prep
     ├── SIH2026_Official_Problem_Statements.md
     └── SIH2026_Official_Guidelines.pdf
 ```
@@ -102,14 +104,53 @@ By mounting sub-₹3,000 edge camera units on existing public transit fleets (bu
 pip install -r requirements.txt
 ```
 
-### 2. Launch the Prototype (One-Click)
+### 2. Run Automated Smoke Tests
+```bash
+cd vigilance-prototype/backend
+pytest test_api.py -v
+# Or run directly without pytest:
+python test_api.py
+```
+
+### 3. Launch the Prototype Locally (One-Click)
 ```bash
 cd vigilance-prototype
 ./start_demo.sh
 ```
 
-* 🌐 **GIS Dashboard:** `http://localhost:3000`
+* 🌐 **GIS Command Center:** `http://localhost:3000`
 * 📚 **Interactive REST API Docs:** `http://localhost:8000/docs`
+* 🔌 **Real-Time Telemetry WebSocket:** `ws://localhost:8000/ws`
+
+---
+
+## ☁️ Production Deployment Guide
+
+### Environment Variables Reference
+
+| Variable | Service | Description | Default / Example |
+| :--- | :--- | :--- | :--- |
+| `DATABASE_URL` | Backend | PostgreSQL + PostGIS connection string | `sqlite:///vigilance.db` (local fallback) |
+| `REDIS_URL` | Backend | Redis broker for Celery & caching | SQLite broker fallback |
+| `NEXT_PUBLIC_API_URL` | Dashboard | Public HTTP URL of FastAPI backend | `http://localhost:8000` |
+| `NEXT_PUBLIC_WS_URL` | Dashboard | Public WebSocket URL of FastAPI backend | `ws://localhost:8000/ws` |
+
+### 1. Deploy Backend (Render / Docker)
+The repository includes a ready-to-use [`render.yaml`](render.yaml) blueprint and container configuration:
+1. **Render.com One-Click Blueprint**: Link this GitHub repository on Render. It will automatically provision:
+   - Python 3.11 Web Service (`vigilance-backend`)
+   - Managed PostgreSQL database with PostGIS (`vigilance-postgres`)
+   - Managed Redis service (`vigilance-redis`)
+2. **Execute PostGIS Setup**: Run `backend/init_postgis.sql` on the PostgreSQL database once to ensure the spatial extension is active.
+
+### 2. Deploy WebGIS Frontend (Vercel)
+The Next.js 14 WebGIS dashboard is configured via [`vercel.json`](vercel.json):
+1. Import the repository into Vercel.
+2. Under **Project Settings > Environment Variables**, configure:
+   - `NEXT_PUBLIC_API_URL` = `https://<your-backend-render-app>.onrender.com`
+   - `NEXT_PUBLIC_WS_URL` = `wss://<your-backend-render-app>.onrender.com/ws`
+3. Trigger deployment. The dashboard connects to live telemetry and gracefully falls back to local data if the backend is temporarily paused.
+
 
 ---
 

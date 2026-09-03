@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { ShieldAlert, Radio, RefreshCw, Wrench, PieChart as PieIcon, MapPin } from 'lucide-react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
@@ -38,7 +38,16 @@ const INITIAL_DETECTIONS = [
   { id: 105, defect_type: "D00", confidence: 0.79, severity: "medium", vehicle_id: "BUS-TN22-5501", road_name: "Old Mahabalipuram Road (OMR)", timestamp: new Date(Date.now() - 600000).toISOString() }
 ];
 
-const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : '';
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:8000' : '');
+
+const getWsUrl = (): string => {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (API_BASE) return API_BASE.replace(/^http/, 'ws') + '/ws';
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') return 'ws://localhost:8000/ws';
+  return '';
+};
 
 export default function DashboardPage() {
   const [stats, setStats] = useState({
@@ -53,9 +62,13 @@ export default function DashboardPage() {
 
   const [detections, setDetections] = useState<any[]>(INITIAL_DETECTIONS);
   const [clusters, setClusters] = useState<any[]>(INITIAL_CLUSTERS);
-  const [isLiveStream, setIsLiveStream] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
 
-  const fetchData = async () => {
+  // Tracks whether the backend API is actually reachable —
+  // prevents simulation and polling from fighting each other
+  const backendAlive = useRef(false);
+
+  const fetchData = useCallback(async () => {
     if (!API_BASE) return;
     try {
       const [statsRes, detRes, clusterRes] = await Promise.all([
@@ -63,6 +76,9 @@ export default function DashboardPage() {
         fetch(`${API_BASE}/api/detections?limit=15`),
         fetch(`${API_BASE}/api/clusters`),
       ]);
+
+      // If we get here without throwing, backend is alive
+      backendAlive.current = true;
 
       if (statsRes.ok) setStats(await statsRes.json());
       if (detRes.ok) {
@@ -74,9 +90,10 @@ export default function DashboardPage() {
         if (c && c.length > 0) setClusters(c);
       }
     } catch (e) {
-      // Local backend offline -> gracefully retain cloud seed data
+      // Backend unreachable — let simulation handle the feed
+      backendAlive.current = false;
     }
-  };
+  }, []);
 
   const updateStatus = async (clusterId: number, newStatus: string) => {
     setClusters(prev => prev.map(c => c.id === clusterId ? { ...c, status: newStatus } : c));
@@ -88,10 +105,64 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
+    setIsMounted(true);
     fetchData();
 
-    // Live Edge Perception Simulation Interval
+    // 1. Periodic database state sync — only overwrites state when backend
+    //    is reachable (fetchData sets backendAlive internally)
+    const pollInterval = setInterval(() => {
+      fetchData();
+    }, 8000);
+
+    // 2. Real-time WebSocket connection to backend
+    let ws: WebSocket | null = null;
+    let wsConnected = false;
+    const wsUrl = getWsUrl();
+
+    if (wsUrl) {
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+          wsConnected = true;
+          backendAlive.current = true;
+        };
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.event === 'NEW_DETECTION' && msg.data) {
+              const d = msg.data;
+              setDetections(prev => [d, ...prev.slice(0, 14)]);
+              const isCrit = d.severity === 'critical';
+              const isPothole = d.defect_type === 'D40' || d.defect_type === 'Pothole';
+              setStats(prev => ({
+                ...prev,
+                total_detections: prev.total_detections + 1,
+                potholes: isPothole ? prev.potholes + 1 : prev.potholes,
+                cracks: !isPothole ? prev.cracks + 1 : prev.cracks,
+                critical_severity: isCrit ? prev.critical_severity + 1 : prev.critical_severity,
+              }));
+            } else if (msg.event === 'CLUSTER_UPDATED' && msg.data) {
+              setClusters(prev => prev.map(c => c.id === msg.data.id ? { ...c, ...msg.data } : c));
+            }
+          } catch (err) {}
+        };
+        ws.onclose = () => {
+          wsConnected = false;
+        };
+        ws.onerror = () => {
+          // Silently handle — backend offline is expected during demo mode
+          wsConnected = false;
+        };
+      } catch (err) {
+        wsConnected = false;
+      }
+    }
+
+    // 3. Fallback Edge Perception Simulation — ONLY runs when
+    //    both the WebSocket AND the REST API are unreachable
     const simInterval = setInterval(() => {
+      if (wsConnected || backendAlive.current) return;
+
       const vehicles = ["BUS-TN01-1042", "BUS-TN02-3891", "MUNICIPAL-TRUCK-07", "PATROL-VAN-12", "BUS-TN22-5501"];
       const defects = ["D40", "D20", "D10", "D00"];
       const roads = ["GST Road, Tambaram (NH-32)", "Anna Salai (Mount Road)", "Guindy Kathipara Junction", "SRM / Potheri Corridor", "OMR IT Express Highway"];
@@ -105,7 +176,7 @@ export default function DashboardPage() {
         id: Date.now(),
         defect_type: newDefect,
         confidence: Number((0.82 + Math.random() * 0.16).toFixed(2)),
-        severity: isCrit ? "critical" : (newDefect in ["D40", "D20"] ? "high" : "medium"),
+        severity: isCrit ? "critical" : (["D40", "D20"].includes(newDefect) ? "high" : "medium"),
         vehicle_id: newVehicle,
         road_name: newRoad,
         timestamp: new Date().toISOString()
@@ -121,8 +192,12 @@ export default function DashboardPage() {
       }));
     }, 4000);
 
-    return () => clearInterval(simInterval);
-  }, []);
+    return () => {
+      clearInterval(pollInterval);
+      clearInterval(simInterval);
+      if (ws) ws.close();
+    };
+  }, [fetchData]);
 
   const chartData = {
     labels: ['Potholes (D40)', 'Cracks (D00-D20)', 'Critical Hazards'],
@@ -161,7 +236,7 @@ export default function DashboardPage() {
             <span>{stats.active_vehicles} Fleet Nodes Active (Live Stream)</span>
           </div>
           <button
-            onClick={() => setStats(prev => ({ ...prev, total_detections: prev.total_detections + 1 }))}
+            onClick={() => fetchData()}
             className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded border border-slate-700 flex items-center gap-1.5 transition"
           >
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
@@ -214,9 +289,9 @@ export default function DashboardPage() {
                 >
                   <div className="flex justify-between items-center">
                     <span className={`font-bold ${d.severity === 'critical' ? 'text-red-400' : 'text-amber-400'}`}>
-                      {d.defect_type} ({d.severity.toUpperCase()})
+                      {d.defect_type} ({d.severity?.toUpperCase()})
                     </span>
-                    <span className="text-[10px] text-slate-400">{new Date(d.timestamp).toLocaleTimeString()}</span>
+                    <span className="text-[10px] text-slate-400" suppressHydrationWarning>{isMounted ? new Date(d.timestamp).toLocaleTimeString() : '--:--:--'}</span>
                   </div>
                   <div className="text-slate-300 text-[11px] truncate">{d.road_name}</div>
                   <div className="flex justify-between items-center text-[10px] text-slate-500 mt-0.5">
